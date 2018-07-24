@@ -21,6 +21,12 @@ import (
  */
 type session struct {
 
+	/* marks session as stopped */
+	stopped uint32
+
+	/* actually sent client requests */
+	sentRequests uint64
+
 	/* timeout for new data from client */
 	clientIdleTimeout time.Duration
 
@@ -29,9 +35,6 @@ type session struct {
 
 	/* max number of client requests */
 	maxRequests uint64
-
-	/* actually sent client requests */
-	_sentRequests uint64
 
 	/* max number of backend responses */
 	maxResponses uint64
@@ -102,7 +105,6 @@ func (s *session) start() error {
 		tC = t.C
 	}
 
-	stopped := false
 	go func() {
 		for {
 			select {
@@ -114,7 +116,7 @@ func (s *session) start() error {
 					}()
 				}
 			case <-s.stopC:
-				stopped = true
+				atomic.StoreUint32(&s.stopped, 1)
 				log.Debug("Closing client session: ", s.clientAddr)
 				s.notifyClosed()
 				s.backendConn.Close()
@@ -148,7 +150,7 @@ func (s *session) start() error {
 
 			if err != nil {
 
-				if !err.(*net.OpError).Timeout() && !stopped {
+				if !err.(*net.OpError).Timeout() && atomic.LoadUint32(&s.stopped) == 0 {
 					log.Error("Error reading from backend ", err)
 				}
 
@@ -168,8 +170,9 @@ func (s *session) start() error {
 			}
 
 			if s.maxRequests > 0 {
-				if atomic.LoadUint64(&s._sentRequests) >= s.maxRequests {
+				if atomic.LoadUint64(&s.sentRequests) >= s.maxRequests {
 					s.stop()
+					return
 				}
 			}
 
@@ -182,6 +185,7 @@ func (s *session) start() error {
  * Writes data to session backend
  */
 func (s *session) send(buf []byte) error {
+
 	select {
 	case s.clientActivityC <- true:
 	default:
@@ -195,7 +199,7 @@ func (s *session) send(buf []byte) error {
 	s.scheduler.IncrementTx(*s.backend, uint(len(buf)))
 
 	if s.maxRequests > 0 {
-		if atomic.AddUint64(&s._sentRequests, 1) > s.maxRequests {
+		if atomic.AddUint64(&s.sentRequests, 1) > s.maxRequests {
 			s.stop()
 		}
 	}

@@ -141,6 +141,15 @@ func (this *Server) Start() error {
 		for {
 			select {
 
+			/* handle session remove */
+			case clientAddr := <-this.remove:
+				session, ok := sessions[clientAddr.String()]
+				if !ok {
+					break
+				}
+				session.stop()
+				delete(sessions, clientAddr.String())
+
 			/* handle get session request */
 			case sessionRequest := <-this.getOrCreate:
 				session, ok := sessions[sessionRequest.clientAddr.String()]
@@ -162,15 +171,6 @@ func (this *Server) Start() error {
 					session: session,
 					err:     err,
 				}
-
-			/* handle session remove */
-			case clientAddr := <-this.remove:
-				session, ok := sessions[clientAddr.String()]
-				if !ok {
-					break
-				}
-				session.stop()
-				delete(sessions, clientAddr.String())
 
 			/* handle server stop */
 			case <-this.stop:
